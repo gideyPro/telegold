@@ -244,6 +244,11 @@ async function sendTelegramMessage(chat_id: number, text: string, env: Env, repl
     return result !== null;
 }
 
+// Helper to escape Markdown special characters
+function escapeMarkdown(text: string): string {
+    return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
 // Helper to edit an existing message (for cleaner UI navigation)
 async function editTelegramMessage(chat_id: number, message_id: number, text: string, env: Env, reply_markup?: any): Promise<boolean> {
     const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/editMessageText`;
@@ -1004,6 +1009,21 @@ async function handleCallbackQuery(query: any, env: Env) {
                 await handleWhoIsAdmin(chat_id, env, message_id);
                 break;
 
+            case '/cancel':
+                await clearAdminPendingCommand(sender_id, env);
+                if (message_id) {
+                    await editTelegramMessage(chat_id, message_id, "🚫 Operation cancelled.", env);
+                    // Re-show admin menu after a short delay or immediately append it? 
+                    // Better to just show the menu.
+                    const menu = await getAdminMenu(env);
+                    await sendTelegramMessage(chat_id, menu.text, env, menu.markup);
+                } else {
+                    await sendTelegramMessage(chat_id, "🚫 Operation cancelled.", env);
+                    const menu = await getAdminMenu(env);
+                    await sendTelegramMessage(chat_id, menu.text, env, menu.markup);
+                }
+                break;
+
             case '/list_users':
                 await handleListAllUsers(chat_id, env);
                 break;
@@ -1020,26 +1040,26 @@ async function handleCallbackQuery(query: any, env: Env) {
             // --- Conversational Flow Start (Text Input Required) ---
             case '/set_channel_id_flow':
                 await setAdminPendingCommand(sender_id, '/set_channel_id', env);
-                await sendTelegramMessage(chat_id, "Please reply with the *Channel ID* (e.g., `-100xxxxxxxxxx`) you want to set.", env);
+                await editTelegramMessage(chat_id, query.message.message_id, "Please reply with the *Channel ID* (e.g., `-100xxxxxxxxxx`) you want to set.", env, { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "/cancel" }]] });
                 break;
 
             case '/set_payment_amount_flow':
                 await setAdminPendingCommand(sender_id, '/set_payment_amount', env);
-                await sendTelegramMessage(chat_id, "Please reply with the *Payment Amount* in ETB (e.g., `100` or `99.99`).", env);
+                await editTelegramMessage(chat_id, query.message.message_id, "Please reply with the *Payment Amount* in ETB (e.g., `100` or `99.99`).", env, { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "/cancel" }]] });
                 break;
 
             case '/set_payment_phone_flow':
                 await setAdminPendingCommand(sender_id, '/set_payment_phone', env);
-                await sendTelegramMessage(chat_id, "Please reply with the *Payment Phone Number* (e.g., `+2519xxxxxxxx` or `09xxxxxxxx`).", env);
+                await editTelegramMessage(chat_id, query.message.message_id, "Please reply with the *Payment Phone Number* (e.g., `+2519xxxxxxxx` or `09xxxxxxxx`).", env, { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "/cancel" }]] });
                 break;
             case '/add_admin_flow':
                 await setAdminPendingCommand(sender_id, '/add_admin', env);
-                await sendTelegramMessage(chat_id, "Please reply with the numerical *User ID* you want to add as an admin.", env);
+                await editTelegramMessage(chat_id, query.message.message_id, "Please reply with the numerical *User ID* you want to add as an admin.", env, { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "/cancel" }]] });
                 break;
 
             case '/invite_user_flow': // Added a new utility button flow
                 await setAdminPendingCommand(sender_id, '/invite_user', env);
-                await sendTelegramMessage(chat_id, "Please reply with the *Recipient's Numerical Telegram User ID* to send the invite link to.", env);
+                await editTelegramMessage(chat_id, query.message.message_id, "Please reply with the *Recipient's Numerical Telegram User ID* to send the invite link to.", env, { inline_keyboard: [[{ text: "❌ Cancel", callback_data: "/cancel" }]] });
                 break;
             case '/check_expired_subscriptions':
                 await handleCheckExpiredSubscriptions(chat_id, env);
@@ -1413,8 +1433,10 @@ router.post('/webhook', async (request: Request, env: Env) => {
         console.log('[/start] Command received from user:', sender_id);
         try {
             const first_name = message.from?.first_name || 'User';
-            let welcomeMessage = `Hello, *${first_name}*! \n\n`;
-            console.log('[/start] User first_name:', first_name);
+            // SANITIZE FIRST NAME TO PREVENT MARKDOWN ERRORS
+            const safe_first_name = escapeMarkdown(first_name);
+            let welcomeMessage = `Hello, *${safe_first_name}*! \n\n`;
+            console.log('[/start] User first_name:', first_name, 'Safe:', safe_first_name);
 
             if (senderIsAdmin) {
                 console.log('[/start] User is admin, showing admin menu');

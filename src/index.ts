@@ -1440,11 +1440,13 @@ router.post('/webhook', async (request: Request, env: Env) => {
         } else {
             await sendTelegramMessage(chat_id, REGULAR_HELP, env);
         }
+        return new Response('OK');
     }
 
     // --- COMMAND: /status (for regular users) ---
     else if (text === '/status' && !senderIsAdmin) {
         await handleUserStatusCommand(chat_id, sender_id, env);
+        return new Response('OK');
     }
 
 
@@ -1454,11 +1456,13 @@ router.post('/webhook', async (request: Request, env: Env) => {
         if (text.startsWith('/')) {
             await sendTelegramMessage(chat_id, "Command not recognized. Please use the buttons or type \`/start\`/\`/help\` to open the main menu.", env);
         }
+        return new Response('OK');
     }
 
     // --- FALLBACK (Non-admin or unrecognized command) ---
     else if (text.startsWith('/')) {
         await sendTelegramMessage(chat_id, "Command not recognized. Type \`/help\` for a list of available commands.", env);
+        return new Response('OK');
     }
 
     return new Response('OK', { status: 200 });

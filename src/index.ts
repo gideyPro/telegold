@@ -1381,11 +1381,42 @@ router.post('/webhook', async (request: Request, env: Env) => {
                 welcomeMessage += ALREADY_APPROVED;
                 await sendTelegramMessage(chat_id, welcomeMessage, env);
             } else {
-                // Case: User is new, in progress, or approved but no longer in the channel.
-                if (currentState && currentState.status === STATE.APPROVED) {
+                // Case: User needs to register or re-register
+
+                // Add context-specific message based on current state
+                if (!currentState) {
+                    // New user - no previous state
+                    welcomeMessage += "Welcome to GoldBot! 🎉\n\n";
+                } else if (currentState.status === STATE.APPROVED) {
+                    // Was approved but no longer in channel
                     welcomeMessage += "It looks like you're no longer in the private channel. Let's get you registered again.\n\n";
+                } else if (currentState.status === STATE.REJECTED) {
+                    // Previously rejected - allow re-registration
+                    welcomeMessage += "Starting a new registration. Please follow the steps below.\n\n";
+                } else if (currentState.status === STATE.PENDING_ADMIN_REVIEW) {
+                    // Already pending review
+                    welcomeMessage += "Your payment is already pending admin review. Please wait for approval.\n\n";
+                    await sendTelegramMessage(chat_id, welcomeMessage, env);
+                    return new Response('OK');
+                } else if (currentState.status === STATE.PENDING_CONFIRMATION) {
+                    // Already has phone, needs to confirm
+                    welcomeMessage += "You've already provided your phone number. Please confirm your payment using the button below.\n\n";
+                    const markup = {
+                        inline_keyboard: [
+                            [{ text: "✅ Confirm Payment", callback_data: "/confirm_payment" }]
+                        ]
+                    };
+                    await sendTelegramMessage(chat_id, welcomeMessage, env, markup);
+                    return new Response('OK');
+                } else if (currentState.status === STATE.WAITING_FOR_PHONE) {
+                    // Already in registration flow
+                    welcomeMessage += "You're already in the registration process. Please continue by following the instructions below.\n\n";
                 }
+
+                // Set/reset user to WAITING_FOR_PHONE state
                 await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
+
+                // Show full instructions
                 welcomeMessage += await getFullInstructions(env);
                 await sendTelegramMessage(chat_id, welcomeMessage, env);
             }

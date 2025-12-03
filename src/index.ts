@@ -38,7 +38,7 @@ const PAYMENT_APPROVED = "✅ Payment approved. Here is your single-use invite l
 const PAYMENT_REJECTED = "❌ Your payment was not approved. Please contact an admin for the reason.";
 const ACCESS_REVOKED = "⛔ Your access to the private channel has been revoked. To re-subscribe, use /start.";
 const USER_STATUS_MESSAGE = "ℹ️ *Your Subscription Status:*";
-const REGULAR_HELP = "👋 *GoldBot* registration assistant.\n\n*Commands:*\n• `/register` - Start registration\n• `/status` - Check your subscription status\n• `/help` - Show this message";
+const REGULAR_HELP = "👋 *GoldBot* registration assistant.\n\n*Commands:*\n• `/start` - Start registration\n• `/status` - Check your subscription status\n• `/help` - Show this message";
 
 // =========================================================
 // 1A. VALIDATION UTILITIES
@@ -1515,7 +1515,7 @@ router.post('/webhook', async (request: Request, env: Env) => {
                 try { paymentPhone = await getPaymentPhone(env) || 'UNKNOWN'; } catch (e) { }
 
                 messageText += `ℹ️ *Payment Reminder*\n\n`;
-                messageText += `Please pay *${paymentAmount} ETB* to *${paymentPhone}* via Telebirr.\n\n`;
+                messageText += `Please pay *${paymentAmount} ETB* to \`${paymentPhone}\` via Telebirr.\n\n`;
                 messageText += `Then, send the *phone number* you used for payment here.`;
                 // Do NOT set showInstructions = true
             }
@@ -1536,7 +1536,26 @@ router.post('/webhook', async (request: Request, env: Env) => {
                 // Reset/Set state to WAITING_FOR_PHONE
                 console.log('[/start] Action: Sending Instructions');
                 await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
-                const instructions = await getFullInstructions(env);
+
+                let paymentAmount = 'UNKNOWN';
+                let paymentPhone = 'UNKNOWN';
+                try { paymentAmount = await getPaymentAmount(env) || 'UNKNOWN'; } catch (e) { }
+                try { paymentPhone = await getPaymentPhone(env) || 'UNKNOWN'; } catch (e) { }
+
+                const instructions = `
+🎉 *Welcome to the Premium Channel!*
+
+To get access, please follow these steps:
+
+1️⃣ Make a payment of *${paymentAmount} ETB* via Telebirr to:
+\`${paymentPhone}\` (Tap to copy)
+
+2️⃣ After payment, simply *send the phone number* you used to pay right here in this chat.
+
+_Example:_ \`0911223344\` or \`+251911223344\`
+
+We will verify your payment and send you the invite link instantly! 🚀
+`;
                 messageText += instructions;
             }
 
@@ -1574,46 +1593,6 @@ router.post('/webhook', async (request: Request, env: Env) => {
         }
     }
 
-    // --- COMMAND: /register (Main Registration Flow) ---
-    else if (text === '/register') {
-        console.log('[/register] Command received from user:', sender_id);
-
-        try {
-            const first_name = message.from?.first_name || 'User';
-            const safe_first_name = escapeMarkdown(first_name);
-
-            // SIMPLIFIED LOGIC: Always start fresh
-            // This guarantees the user gets a response and can proceed.
-
-            // 1. Set state to WAITING_FOR_PHONE
-            await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
-
-            // 2. Build Welcome Message
-            let messageText = `Hello, *${safe_first_name}*! \n\n`;
-            messageText += "Welcome to GoldBot! 🎉\n\n";
-
-            // 3. Add Instructions
-            const instructions = await getFullInstructions(env);
-            messageText += instructions;
-
-            // 4. Send Message
-            const success = await sendTelegramMessage(chat_id, messageText, env);
-
-            if (!success) {
-                console.log('[/register] Markdown message failed, trying plain text fallback');
-                // Fallback: Send plain text if Markdown failed (likely due to name chars)
-                const plainText = messageText.replace(/[*_`]/g, ''); // Strip markdown chars
-                await sendTelegramMessage(chat_id, plainText, env, undefined, undefined); // No parse_mode
-            }
-
-            return new Response('OK');
-
-        } catch (e) {
-            console.error("Critical error in /register handler:", e);
-            await sendTelegramMessage(chat_id, "🆘 A critical error occurred. Please try again later.", env);
-            return new Response('OK');
-        }
-    }
 
     // --- COMMAND: /help (Context-Aware) ---
     else if (text === '/help') {

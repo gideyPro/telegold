@@ -1351,7 +1351,7 @@ router.post('/webhook', async (request: Request, env: Env) => {
     // =====================================================================
 
     // --- COMMAND: /start (Initiates Payment Flow) ---
-    else if (text === '/start') {
+    if (text === '/start') {
         try {
             const first_name = message.from?.first_name || 'User';
             let welcomeMessage = `Hello, *${first_name}*! \n\n`;

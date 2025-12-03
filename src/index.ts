@@ -1460,77 +1460,22 @@ router.post('/webhook', async (request: Request, env: Env) => {
             const first_name = message.from?.first_name || 'User';
             const safe_first_name = escapeMarkdown(first_name);
 
-            // Get current state and config
-            const currentState = await getUserState(sender_id, env);
-            const channelId = await getChannelId(env);
+            // SIMPLIFIED LOGIC: Always start fresh
+            // This guarantees the user gets a response and can proceed.
 
-            console.log(`[/register] User: ${sender_id} (${safe_first_name}), State: ${currentState?.status}`);
+            // 1. Set state to WAITING_FOR_PHONE
+            await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
 
-            // Check if ALREADY APPROVED and STILL A MEMBER
-            let isActiveMember = false;
-            if (currentState && currentState.status === STATE.APPROVED && channelId) {
-                const memberInfo = await getChatMember(channelId, sender_id, env);
-                if (memberInfo && ['creator', 'administrator', 'member'].includes(memberInfo.status)) {
-                    isActiveMember = true;
-                }
-            }
-
-            if (isActiveMember) {
-                await sendTelegramMessage(chat_id, `Hello, *${safe_first_name}*! \n\n` + ALREADY_APPROVED, env);
-                return new Response('OK');
-            }
-
-            // Handle other states
+            // 2. Build Welcome Message
             let messageText = `Hello, *${safe_first_name}*! \n\n`;
-            let showInstructions = false;
-            let showConfirmButton = false;
+            messageText += "Welcome to GoldBot! 🎉\n\n";
 
-            if (!currentState) {
-                // Case: New User
-                messageText += "Welcome to GoldBot! 🎉\n\n";
-                showInstructions = true;
-            }
-            else if (currentState.status === STATE.APPROVED) {
-                // Case: Approved but not in channel
-                messageText += "It looks like you're no longer in the private channel. Let's get you registered again.\n\n";
-                showInstructions = true;
-            }
-            else if (currentState.status === STATE.REJECTED) {
-                // Case: Rejected
-                messageText += "Starting a new registration. Please follow the steps below.\n\n";
-                showInstructions = true;
-            }
-            else if (currentState.status === STATE.WAITING_FOR_PHONE) {
-                // Case: Waiting for phone
-                messageText += "You are already in the registration process.\n\n";
-                showInstructions = true;
-            }
-            else if (currentState.status === STATE.PENDING_CONFIRMATION) {
-                // Case: Pending Confirmation
-                messageText += "You have already provided your phone number. Please confirm your payment using the button below.\n\n";
-                showConfirmButton = true;
-            }
-            else if (currentState.status === STATE.PENDING_ADMIN_REVIEW) {
-                // Case: Pending Review
-                messageText += "Your payment is currently pending admin review. Please wait for approval.\n\n";
-            }
+            // 3. Add Instructions
+            const instructions = await getFullInstructions(env);
+            messageText += instructions;
 
-            // Execute Actions
-            if (showInstructions) {
-                await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
-                const instructions = await getFullInstructions(env);
-                messageText += instructions;
-                await sendTelegramMessage(chat_id, messageText, env);
-            }
-            else if (showConfirmButton) {
-                const markup = {
-                    inline_keyboard: [[{ text: "✅ Confirm Payment", callback_data: "/confirm_payment" }]]
-                };
-                await sendTelegramMessage(chat_id, messageText, env, markup);
-            }
-            else {
-                await sendTelegramMessage(chat_id, messageText, env);
-            }
+            // 4. Send Message
+            await sendTelegramMessage(chat_id, messageText, env);
 
             return new Response('OK');
 

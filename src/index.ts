@@ -228,13 +228,17 @@ ${debugInfo}
 // =========================================================
 
 // Helper function to send messages back to Telegram
-async function sendTelegramMessage(chat_id: number, text: string, env: Env, reply_markup?: any): Promise<boolean> {
+// Helper to send messages back to Telegram
+async function sendTelegramMessage(chat_id: number, text: string, env: Env, reply_markup?: any, parse_mode: string | undefined = 'Markdown'): Promise<boolean> {
     const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`;
     const payload: any = {
         chat_id: chat_id,
         text: text,
-        parse_mode: 'Markdown',
     };
+
+    if (parse_mode) {
+        payload.parse_mode = parse_mode;
+    }
 
     if (reply_markup) {
         payload.reply_markup = reply_markup;
@@ -244,9 +248,10 @@ async function sendTelegramMessage(chat_id: number, text: string, env: Env, repl
     return result !== null;
 }
 
-// Helper to escape Markdown special characters
+// Helper to escape Markdown special characters (Legacy Markdown)
 function escapeMarkdown(text: string): string {
-    return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+    // Legacy Markdown only needs escaping for *, _, `, [
+    return text.replace(/[*_`[]/g, '\\$&');
 }
 
 // Helper to edit an existing message (for cleaner UI navigation)
@@ -1475,7 +1480,14 @@ router.post('/webhook', async (request: Request, env: Env) => {
             messageText += instructions;
 
             // 4. Send Message
-            await sendTelegramMessage(chat_id, messageText, env);
+            const success = await sendTelegramMessage(chat_id, messageText, env);
+
+            if (!success) {
+                console.log('[/register] Markdown message failed, trying plain text fallback');
+                // Fallback: Send plain text if Markdown failed (likely due to name chars)
+                const plainText = messageText.replace(/[*_`]/g, ''); // Strip markdown chars
+                await sendTelegramMessage(chat_id, plainText, env, undefined, undefined); // No parse_mode
+            }
 
             return new Response('OK');
 

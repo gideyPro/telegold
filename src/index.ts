@@ -1352,24 +1352,34 @@ router.post('/webhook', async (request: Request, env: Env) => {
 
     // --- COMMAND: /start (Initiates Payment Flow) ---
     if (text === '/start') {
+        console.log('[/start] Command received from user:', sender_id);
         try {
             const first_name = message.from?.first_name || 'User';
             let welcomeMessage = `Hello, *${first_name}*! \n\n`;
+            console.log('[/start] User first_name:', first_name);
 
             if (senderIsAdmin) {
+                console.log('[/start] User is admin, showing admin menu');
                 welcomeMessage += "👑 *Bot Admin* access detected. Opening control panel.\n\n";
                 const menu = await getAdminMenu(env);
                 await sendTelegramMessage(chat_id, welcomeMessage + menu.text, env, menu.markup);
                 return new Response('OK'); // Explicitly return for admin
             }
 
+            console.log('[/start] User is regular user, checking state');
             // For regular users, determine their status and then act.
             const currentState = await getUserState(sender_id, env);
+            console.log('[/start] Current user state:', currentState);
+
             const channelId = await getChannelId(env);
+            console.log('[/start] Channel ID:', channelId);
+
             let isApprovedAndMember = false;
 
             if (currentState && currentState.status === STATE.APPROVED && channelId) {
+                console.log('[/start] Checking if user is member of channel');
                 const memberInfo = await getChatMember(channelId, sender_id, env);
+                console.log('[/start] Member info:', memberInfo);
                 const activeStatuses = ['creator', 'administrator', 'member'];
                 if (memberInfo && activeStatuses.includes(memberInfo.status)) {
                     isApprovedAndMember = true;
@@ -1377,29 +1387,36 @@ router.post('/webhook', async (request: Request, env: Env) => {
             }
 
             if (isApprovedAndMember) {
+                console.log('[/start] User is approved and member');
                 // Case: User is approved and in the channel.
                 welcomeMessage += ALREADY_APPROVED;
                 await sendTelegramMessage(chat_id, welcomeMessage, env);
             } else {
+                console.log('[/start] User needs to register or re-register');
                 // Case: User needs to register or re-register
 
                 // Add context-specific message based on current state
                 if (!currentState) {
                     // New user - no previous state
+                    console.log('[/start] New user - no previous state');
                     welcomeMessage += "Welcome to GoldBot! 🎉\n\n";
                 } else if (currentState.status === STATE.APPROVED) {
                     // Was approved but no longer in channel
+                    console.log('[/start] Was approved but no longer in channel');
                     welcomeMessage += "It looks like you're no longer in the private channel. Let's get you registered again.\n\n";
                 } else if (currentState.status === STATE.REJECTED) {
                     // Previously rejected - allow re-registration
+                    console.log('[/start] Previously rejected');
                     welcomeMessage += "Starting a new registration. Please follow the steps below.\n\n";
                 } else if (currentState.status === STATE.PENDING_ADMIN_REVIEW) {
                     // Already pending review
+                    console.log('[/start] Already pending review');
                     welcomeMessage += "Your payment is already pending admin review. Please wait for approval.\n\n";
                     await sendTelegramMessage(chat_id, welcomeMessage, env);
                     return new Response('OK');
                 } else if (currentState.status === STATE.PENDING_CONFIRMATION) {
                     // Already has phone, needs to confirm
+                    console.log('[/start] Already has phone, needs to confirm');
                     welcomeMessage += "You've already provided your phone number. Please confirm your payment using the button below.\n\n";
                     const markup = {
                         inline_keyboard: [
@@ -1410,18 +1427,27 @@ router.post('/webhook', async (request: Request, env: Env) => {
                     return new Response('OK');
                 } else if (currentState.status === STATE.WAITING_FOR_PHONE) {
                     // Already in registration flow
+                    console.log('[/start] Already in registration flow');
                     welcomeMessage += "You're already in the registration process. Please continue by following the instructions below.\n\n";
                 }
 
                 // Set/reset user to WAITING_FOR_PHONE state
+                console.log('[/start] Setting user state to WAITING_FOR_PHONE');
                 await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
 
                 // Show full instructions
-                welcomeMessage += await getFullInstructions(env);
-                await sendTelegramMessage(chat_id, welcomeMessage, env);
+                console.log('[/start] Getting full instructions');
+                const instructions = await getFullInstructions(env);
+                console.log('[/start] Instructions:', instructions);
+                welcomeMessage += instructions;
+
+                console.log('[/start] Sending welcome message');
+                const sendResult = await sendTelegramMessage(chat_id, welcomeMessage, env);
+                console.log('[/start] Send result:', sendResult);
             }
 
             // Acknowledge the webhook for all regular user flows.
+            console.log('[/start] Returning OK response');
             return new Response('OK');
 
         } catch (e) {

@@ -244,6 +244,35 @@ async function sendTelegramMessage(chat_id: number, text: string, env: Env, repl
     return result !== null;
 }
 
+// Helper to edit an existing message (for cleaner UI navigation)
+async function editTelegramMessage(chat_id: number, message_id: number, text: string, env: Env, reply_markup?: any): Promise<boolean> {
+    const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/editMessageText`;
+    const payload: any = {
+        chat_id: chat_id,
+        message_id: message_id,
+        text: text,
+        parse_mode: 'Markdown',
+    };
+
+    if (reply_markup) {
+        payload.reply_markup = reply_markup;
+    }
+
+    const result = await safeTelegramRequest(url, payload);
+    return result !== null;
+}
+
+// Helper to delete a message
+async function deleteTelegramMessage(chat_id: number, message_id: number, env: Env): Promise<boolean> {
+    const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/deleteMessage`;
+    const payload = {
+        chat_id: chat_id,
+        message_id: message_id
+    };
+    const result = await safeTelegramRequest(url, payload);
+    return result !== null;
+}
+
 // Helper function to generate a single-use invite link
 async function generateSingleUseInviteLink(channel_id: string, name: string, env: Env) {
     const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/createChatInviteLink`;
@@ -703,9 +732,11 @@ async function handleRevokeAccess(chat_id: number, targetUserIdString: string, e
     let linkRevoked = false;
     const storedLink = currentState.inviteLink;
     if (storedLink) {
+        // To "delete" a link in Telegram, we revoke it. 
+        // We can also try to edit it to be expired immediately if it wasn't already.
         linkRevoked = await revokeChatInviteLink(currentChannelId, storedLink, env);
         if (linkRevoked) {
-            await sendTelegramMessage(chat_id, `🔗 User's invite link successfully *REVOKED*.`, env);
+            await sendTelegramMessage(chat_id, `🔗 User's invite link successfully *REVOKED* and invalidated.`, env);
         } else {
             await sendTelegramMessage(chat_id, `⚠️ Failed to revoke invite link. It may have already been consumed or expired.`, env);
         }
@@ -906,6 +937,7 @@ async function handleRegularUserFlow(chat_id: number, text: string, sender_id: n
 // =========================================================
 async function handleCallbackQuery(query: any, env: Env) {
     const chat_id = query.message?.chat.id || query.from.id;
+    const message_id = query.message?.message_id;
     const data = query.data;
     const sender_id = query.from.id;
     const senderIsAdmin = await isAdmin(sender_id, env);
@@ -927,44 +959,49 @@ async function handleCallbackQuery(query: any, env: Env) {
         switch (command) {
             case '/admin_menu': {
                 const menu = await getAdminMenu(env);
-                await sendTelegramMessage(chat_id, menu.text, env, menu.markup);
+                if (message_id) {
+                    await editTelegramMessage(chat_id, message_id, menu.text, env, menu.markup);
+                } else {
+                    await sendTelegramMessage(chat_id, menu.text, env, menu.markup);
+                }
                 break;
             }
 
             case '/manage_admins': {
                 const menu = getAdminManagementMenu();
-                await sendTelegramMessage(chat_id, menu.text, env, menu.markup);
+                if (message_id) {
+                    await editTelegramMessage(chat_id, message_id, menu.text, env, menu.markup);
+                } else {
+                    await sendTelegramMessage(chat_id, menu.text, env, menu.markup);
+                }
                 break;
             }
 
             case '/approve':
                 if (argument) await handleApprovePayment(chat_id, argument, env);
-                await sendTelegramMessage(chat_id, "ℹ️ Refreshing payment list...", env);
-                await handleReviewPayments(chat_id, env); // Refresh the review list
+                await handleReviewPayments(chat_id, env, message_id); // Refresh the review list in-place if possible
                 break;
 
             case '/reject':
                 if (argument) await handleRejectPayment(chat_id, argument, env);
-                await sendTelegramMessage(chat_id, "ℹ️ Refreshing payment list...", env);
-                await handleReviewPayments(chat_id, env); // Refresh the review list
+                await handleReviewPayments(chat_id, env, message_id); // Refresh the review list in-place
                 break;
 
             case '/revoke_access':
                 if (argument) await handleRevokeAccess(chat_id, argument, env);
-                await sendTelegramMessage(chat_id, "ℹ️ Refreshing approved user list...", env);
-                await handleListApprovedUsers(chat_id, env); // Refresh the approved list
+                await handleListApprovedUsers(chat_id, env, message_id); // Refresh the approved list in-place
                 break;
 
             case '/review_payments':
-                await handleReviewPayments(chat_id, env);
+                await handleReviewPayments(chat_id, env, message_id);
                 break;
 
             case '/list_approved':
-                await handleListApprovedUsers(chat_id, env);
+                await handleListApprovedUsers(chat_id, env, message_id);
                 break;
 
             case '/whoisadmin':
-                await handleWhoIsAdmin(chat_id, env);
+                await handleWhoIsAdmin(chat_id, env, message_id);
                 break;
 
             case '/list_users':
@@ -1099,12 +1136,16 @@ async function handleUserStatusCommand(chat_id: number, sender_id: number, env: 
 }
 
 
-async function handleReviewPayments(chat_id: number, env: Env) {
+async function handleReviewPayments(chat_id: number, env: Env, message_id?: number) {
     const pendingUsers = await getUsersInState(STATE.PENDING_ADMIN_REVIEW, env);
 
     if (pendingUsers.length === 0) {
         const markup = { inline_keyboard: [[{ text: "⬅️ Back to Admin Menu", callback_data: "/admin_menu" }]] };
-        await sendTelegramMessage(chat_id, "✅ No payments are currently pending admin review.", env, markup);
+        if (message_id) {
+            await editTelegramMessage(chat_id, message_id, "✅ No payments are currently pending admin review.", env, markup);
+        } else {
+            await sendTelegramMessage(chat_id, "✅ No payments are currently pending admin review.", env, markup);
+        }
         return;
     }
 
@@ -1113,26 +1154,32 @@ async function handleReviewPayments(chat_id: number, env: Env) {
     ).join('\n---\n');
 
     // Generate dynamic inline buttons for each user - BUTTON TEXT SIMPLIFIED
-    const buttons = pendingUsers.flatMap(user => [
-        [{ text: `✅ Approve`, callback_data: `/approve ${user.id}` },
-        { text: `❌ Reject`, callback_data: `/reject ${user.id}` }]
+    const buttons = pendingUsers.map(user => [
+        { text: `✅ Approve ${user.displayName}`, callback_data: `/approve ${user.id}` },
+        { text: `❌ Reject ${user.displayName}`, callback_data: `/reject ${user.id}` }
     ]);
 
-    // Add back button
     buttons.push([{ text: "⬅️ Back to Admin Menu", callback_data: "/admin_menu" }]);
 
-    const responseMessage = `💰 *PENDING PAYMENTS (${pendingUsers.length}):*\n\n${reviewList}`;
     const markup = { inline_keyboard: buttons };
 
-    await sendTelegramMessage(chat_id, responseMessage, env, markup);
+    if (message_id) {
+        await editTelegramMessage(chat_id, message_id, `� *Pending Payments Review:*\n\n${reviewList}`, env, markup);
+    } else {
+        await sendTelegramMessage(chat_id, `📋 *Pending Payments Review:*\n\n${reviewList}`, env, markup);
+    }
 }
 
-async function handleListApprovedUsers(chat_id: number, env: Env) {
+async function handleListApprovedUsers(chat_id: number, env: Env, message_id?: number) {
     const approvedUsers = await getUsersInState(STATE.APPROVED, env);
 
     if (approvedUsers.length === 0) {
         const markup = { inline_keyboard: [[{ text: "⬅️ Back to Admin Menu", callback_data: "/admin_menu" }]] };
-        await sendTelegramMessage(chat_id, "⚠️ No users are currently marked as APPROVED.", env, markup);
+        if (message_id) {
+            await editTelegramMessage(chat_id, message_id, "⚠️ No approved users found.", env, markup);
+        } else {
+            await sendTelegramMessage(chat_id, "⚠️ No approved users found.", env, markup);
+        }
         return;
     }
 
@@ -1142,16 +1189,18 @@ async function handleListApprovedUsers(chat_id: number, env: Env) {
 
     // Generate dynamic inline buttons for each user - BUTTON TEXT SIMPLIFIED
     const buttons = approvedUsers.map(user =>
-        [{ text: `🗑️ Revoke Access`, callback_data: `/revoke_access ${user.id}` }]
+        [{ text: `� Revoke ${user.displayName}`, callback_data: `/revoke_access ${user.id}` }]
     );
 
     // Add back button
     buttons.push([{ text: "⬅️ Back to Admin Menu", callback_data: "/admin_menu" }]);
 
-    const responseMessage = `✅ *APPROVED/SUBSCRIBED USERS (${approvedUsers.length}):*\n\n${approvedList}`;
     const markup = { inline_keyboard: buttons };
-
-    await sendTelegramMessage(chat_id, responseMessage, env, markup);
+    if (message_id) {
+        await editTelegramMessage(chat_id, message_id, `👥 *Approved Users List:*\n\n${approvedList}`, env, markup);
+    } else {
+        await sendTelegramMessage(chat_id, `👥 *Approved Users List:*\n\n${approvedList}`, env, markup);
+    }
 }
 
 // Displays list of admins with a remove button next to each
@@ -1196,16 +1245,16 @@ async function handleListAdminsForRemoval(chat_id: number, env: Env) {
 }
 
 
-async function handleWhoIsAdmin(chat_id: number, env: Env) {
-    const adminList = await getAdminIds(env);
-    const currentChannelId = await getChannelId(env);
-
-    let responseMessage = `🔐 *System Status* \n\n*Registered Admin IDs:*\n- ${adminList.join('\n- ')}\n\n`;
-    responseMessage += `🔗 *Current Channel ID:* \`${currentChannelId || 'NOT SET'}\``;
-
+async function handleWhoIsAdmin(chat_id: number, env: Env, message_id?: number) {
+    const adminIds = await getAdminIds(env);
+    const adminList = adminIds.map(id => `- \`${id}\``).join('\n');
     const markup = { inline_keyboard: [[{ text: "⬅️ Back to Admin Menu", callback_data: "/admin_menu" }]] };
 
-    await sendTelegramMessage(chat_id, responseMessage, env, markup);
+    if (message_id) {
+        await editTelegramMessage(chat_id, message_id, `👮‍♂️ *Current Admins:*\n\n${adminList}`, env, markup);
+    } else {
+        await sendTelegramMessage(chat_id, `👮‍♂️ *Current Admins:*\n\n${adminList}`, env, markup);
+    }
 }
 
 async function handleListAllUsers(chat_id: number, env: Env) {
@@ -1246,13 +1295,22 @@ export default {
     },
 };
 
+// Health check route
+router.get('/', () => new Response('Bot is running! ✅', { status: 200 }));
+
 router.post('/webhook', async (request: Request, env: Env) => {
+    console.log('[WEBHOOK] Received request');
 
     let update: any;
     try {
-        if (request.method !== 'POST' || typeof request.json !== 'function') return new Response('OK', { status: 200 });
+        if (request.method !== 'POST' || typeof request.json !== 'function') {
+            console.log('[WEBHOOK] Invalid request method or no json function');
+            return new Response('OK', { status: 200 });
+        }
         update = await request.json();
+        console.log('[WEBHOOK] Update received:', JSON.stringify(update));
     } catch (e) {
+        console.error('[WEBHOOK] Error parsing request:', e);
         return new Response('OK', { status: 200 });
     }
 

@@ -1507,8 +1507,17 @@ router.post('/webhook', async (request: Request, env: Env) => {
             else if (currentState.status === STATE.WAITING_FOR_PHONE) {
                 // Case: Already started, hasn't sent phone
                 console.log('[/start] Case: Waiting for phone');
-                messageText += "You are already in the registration process.\n\n";
-                showInstructions = true;
+
+                // Fetch payment details
+                let paymentAmount = 'UNKNOWN';
+                let paymentPhone = 'UNKNOWN';
+                try { paymentAmount = await getPaymentAmount(env) || 'UNKNOWN'; } catch (e) { }
+                try { paymentPhone = await getPaymentPhone(env) || 'UNKNOWN'; } catch (e) { }
+
+                messageText += `ℹ️ *Payment Reminder*\n\n`;
+                messageText += `Please pay *${paymentAmount} ETB* to *${paymentPhone}* via Telebirr.\n\n`;
+                messageText += `Then, send the *phone number* you used for payment here.`;
+                // Do NOT set showInstructions = true
             }
             else if (currentState.status === STATE.PENDING_CONFIRMATION) {
                 // Case: Sent phone, needs to click confirm

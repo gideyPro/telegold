@@ -1,0 +1,18 @@
+{
+  "name": "telegold",
+  "version": "1.0.0",
+  "description": "A minimal Telegram bot running on a Cloudflare Worker.",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev src/index.ts",
+    "deploy": "wrangler deploy --minify src/index.ts"
+  },
+  "dependencies": {
+    "itty-router": "^2.6.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251128.0",
+    "typescript": "^4.9.5",
+    "wrangler": "^4.51.0"
+  }
+}

@@ -33,7 +33,7 @@ const PHONE_RECEIVED = "✅ Phone number received. Now press the button below to
 const INVALID_PHONE = "❌ Invalid phone number format. Please send numbers only.";
 const ALREADY_APPROVED = "✅ You are already a member. Contact admin if you don't have the link.";
 const PENDING_ADMIN_INITIAL_MESSAGE = `✨ Your payment is pending admin review. You will receive a single-use invite link soon.`;
-const PENDING_ADMIN = `✨ Payment pending admin review.`;
+const PENDING_ADMIN = `Phone number confirmed`;
 const PAYMENT_APPROVED = "✅ Payment approved. Here is your single-use invite link.";
 const PAYMENT_REJECTED = "❌ Your payment was not approved. Please contact an admin for the reason.";
 const ACCESS_REVOKED = "⛔ Your access to the private channel has been revoked. To re-subscribe, use /start.";
@@ -1094,7 +1094,7 @@ async function handleCallbackQuery(query: any, env: Env) {
             const payload = {
                 chat_id: chat_id,
                 message_id: query.message.message_id,
-                text: `${originalMessageText}\n\n${PENDING_ADMIN}`,
+                text: `${PENDING_ADMIN}`,
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: [] } // Remove buttons
             };

@@ -1431,109 +1431,115 @@ router.post('/webhook', async (request: Request, env: Env) => {
     // --- COMMAND: /start (Initiates Payment Flow) ---
     if (text === '/start') {
         console.log('[/start] Command received from user:', sender_id);
-        try {
-            const first_name = message.from?.first_name || 'User';
-            // SANITIZE FIRST NAME TO PREVENT MARKDOWN ERRORS
-            const safe_first_name = escapeMarkdown(first_name);
-            let welcomeMessage = `Hello, *${safe_first_name}*! \n\n`;
-            console.log('[/start] User first_name:', first_name, 'Safe:', safe_first_name);
 
+        try {
+            // 1. Admin Check
             if (senderIsAdmin) {
                 console.log('[/start] User is admin, showing admin menu');
+                const first_name = message.from?.first_name || 'Admin';
+                const safe_first_name = escapeMarkdown(first_name);
+                let welcomeMessage = `Hello, *${safe_first_name}*! \n\n`;
                 welcomeMessage += "👑 *Bot Admin* access detected. Opening control panel.\n\n";
                 const menu = await getAdminMenu(env);
                 await sendTelegramMessage(chat_id, welcomeMessage + menu.text, env, menu.markup);
-                return new Response('OK'); // Explicitly return for admin
+                return new Response('OK');
             }
 
-            console.log('[/start] User is regular user, checking state');
-            // For regular users, determine their status and then act.
+            // 2. Regular User Logic - REWRITTEN FROM SCRATCH
+            const first_name = message.from?.first_name || 'User';
+            const safe_first_name = escapeMarkdown(first_name);
+
+            // Get current state and config
             const currentState = await getUserState(sender_id, env);
-            console.log('[/start] Current user state:', currentState);
-
             const channelId = await getChannelId(env);
-            console.log('[/start] Channel ID:', channelId);
 
-            let isApprovedAndMember = false;
+            console.log(`[/start] User: ${sender_id} (${safe_first_name}), State: ${currentState?.status}`);
 
+            // 3. Check if ALREADY APPROVED and STILL A MEMBER
+            let isActiveMember = false;
             if (currentState && currentState.status === STATE.APPROVED && channelId) {
-                console.log('[/start] Checking if user is member of channel');
                 const memberInfo = await getChatMember(channelId, sender_id, env);
-                console.log('[/start] Member info:', memberInfo);
-                const activeStatuses = ['creator', 'administrator', 'member'];
-                if (memberInfo && activeStatuses.includes(memberInfo.status)) {
-                    isApprovedAndMember = true;
+                // Check if user is a member, admin, or creator
+                if (memberInfo && ['creator', 'administrator', 'member'].includes(memberInfo.status)) {
+                    isActiveMember = true;
                 }
             }
 
-            if (isApprovedAndMember) {
-                console.log('[/start] User is approved and member');
-                // Case: User is approved and in the channel.
-                welcomeMessage += ALREADY_APPROVED;
-                await sendTelegramMessage(chat_id, welcomeMessage, env);
-            } else {
-                console.log('[/start] User needs to register or re-register');
-                // Case: User needs to register or re-register
+            if (isActiveMember) {
+                console.log('[/start] User is already an active member.');
+                await sendTelegramMessage(chat_id, `Hello, *${safe_first_name}*! \n\n` + ALREADY_APPROVED, env);
+                return new Response('OK');
+            }
 
-                // Add context-specific message based on current state
-                if (!currentState) {
-                    // New user - no previous state
-                    console.log('[/start] New user - no previous state');
-                    welcomeMessage += "Welcome to GoldBot! 🎉\n\n";
-                } else if (currentState.status === STATE.APPROVED) {
-                    // Was approved but no longer in channel
-                    console.log('[/start] Was approved but no longer in channel');
-                    welcomeMessage += "It looks like you're no longer in the private channel. Let's get you registered again.\n\n";
-                } else if (currentState.status === STATE.REJECTED) {
-                    // Previously rejected - allow re-registration
-                    console.log('[/start] Previously rejected');
-                    welcomeMessage += "Starting a new registration. Please follow the steps below.\n\n";
-                } else if (currentState.status === STATE.PENDING_ADMIN_REVIEW) {
-                    // Already pending review
-                    console.log('[/start] Already pending review');
-                    welcomeMessage += "Your payment is already pending admin review. Please wait for approval.\n\n";
-                    await sendTelegramMessage(chat_id, welcomeMessage, env);
-                    return new Response('OK');
-                } else if (currentState.status === STATE.PENDING_CONFIRMATION) {
-                    // Already has phone, needs to confirm
-                    console.log('[/start] Already has phone, needs to confirm');
-                    welcomeMessage += "You've already provided your phone number. Please confirm your payment using the button below.\n\n";
-                    const markup = {
-                        inline_keyboard: [
-                            [{ text: "✅ Confirm Payment", callback_data: "/confirm_payment" }]
-                        ]
-                    };
-                    await sendTelegramMessage(chat_id, welcomeMessage, env, markup);
-                    return new Response('OK');
-                } else if (currentState.status === STATE.WAITING_FOR_PHONE) {
-                    // Already in registration flow
-                    console.log('[/start] Already in registration flow');
-                    welcomeMessage += "You're already in the registration process. Please continue by following the instructions below.\n\n";
-                }
+            // 4. Handle other states (New, Rejected, Pending, or Approved-but-left)
+            let messageText = `Hello, *${safe_first_name}*! \n\n`;
+            let showInstructions = false;
+            let showConfirmButton = false;
 
-                // Set/reset user to WAITING_FOR_PHONE state
-                console.log('[/start] Setting user state to WAITING_FOR_PHONE');
+            if (!currentState) {
+                // Case: New User
+                console.log('[/start] Case: New User');
+                messageText += "Welcome to GoldBot! 🎉\n\n";
+                showInstructions = true;
+            }
+            else if (currentState.status === STATE.APPROVED) {
+                // Case: Was approved, but not in channel anymore (isActiveMember was false)
+                console.log('[/start] Case: Approved but not in channel');
+                messageText += "It looks like you're no longer in the private channel. Let's get you registered again.\n\n";
+                showInstructions = true;
+            }
+            else if (currentState.status === STATE.REJECTED) {
+                // Case: Rejected, allow retry
+                console.log('[/start] Case: Rejected');
+                messageText += "Starting a new registration. Please follow the steps below.\n\n";
+                showInstructions = true;
+            }
+            else if (currentState.status === STATE.WAITING_FOR_PHONE) {
+                // Case: Already started, hasn't sent phone
+                console.log('[/start] Case: Waiting for phone');
+                messageText += "You are already in the registration process.\n\n";
+                showInstructions = true;
+            }
+            else if (currentState.status === STATE.PENDING_CONFIRMATION) {
+                // Case: Sent phone, needs to click confirm
+                console.log('[/start] Case: Pending Confirmation');
+                messageText += "You have already provided your phone number. Please confirm your payment using the button below.\n\n";
+                showConfirmButton = true;
+            }
+            else if (currentState.status === STATE.PENDING_ADMIN_REVIEW) {
+                // Case: Waiting for admin
+                console.log('[/start] Case: Pending Admin Review');
+                messageText += "Your payment is currently pending admin review. Please wait for approval.\n\n";
+                // No instructions, no button. Just wait.
+            }
+
+            // 5. Execute Actions based on flags
+            if (showInstructions) {
+                // Reset/Set state to WAITING_FOR_PHONE
+                console.log('[/start] Action: Sending Instructions');
                 await setUserState(sender_id, { status: STATE.WAITING_FOR_PHONE, timestamp: Date.now() }, env);
-
-                // Show full instructions
-                console.log('[/start] Getting full instructions');
                 const instructions = await getFullInstructions(env);
-                console.log('[/start] Instructions:', instructions);
-                welcomeMessage += instructions;
-
-                console.log('[/start] Sending welcome message');
-                const sendResult = await sendTelegramMessage(chat_id, welcomeMessage, env);
-                console.log('[/start] Send result:', sendResult);
+                messageText += instructions;
+                await sendTelegramMessage(chat_id, messageText, env);
+            }
+            else if (showConfirmButton) {
+                console.log('[/start] Action: Sending Confirm Button');
+                const markup = {
+                    inline_keyboard: [[{ text: "✅ Confirm Payment", callback_data: "/confirm_payment" }]]
+                };
+                await sendTelegramMessage(chat_id, messageText, env, markup);
+            }
+            else {
+                // Just send the message (e.g. Pending Review)
+                console.log('[/start] Action: Sending Message Only');
+                await sendTelegramMessage(chat_id, messageText, env);
             }
 
-            // Acknowledge the webhook for all regular user flows.
-            console.log('[/start] Returning OK response');
             return new Response('OK');
 
         } catch (e) {
             console.error("Critical error in /start handler:", e);
-            await sendTelegramMessage(chat_id, "🆘 A critical error occurred. I am unable to process your request at this time. Please try again later or contact an administrator.", env);
-            // Also acknowledge on error to prevent retries.
+            await sendTelegramMessage(chat_id, "🆘 A critical error occurred. Please try again later.", env);
             return new Response('OK');
         }
     }

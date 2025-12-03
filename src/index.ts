@@ -895,6 +895,11 @@ async function handleRegularUserFlow(chat_id: number, text: string, sender_id: n
 
     // Check if the user is in the state WAITING_FOR_PHONE
     if (currentState && currentState.status === STATE.WAITING_FOR_PHONE) {
+        // IGNORE COMMANDS: If text starts with '/', let the main router handle it.
+        if (text.startsWith('/')) {
+            return null;
+        }
+
         const phone = text.trim();
         const validation = validateEthiopianPhone(phone);
 

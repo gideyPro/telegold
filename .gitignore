@@ -1,0 +1,8 @@
+node_modules
+.wrangler
+.vscode
+.idea
+dist
+worker
+*.log
+.DS_Store

@@ -229,7 +229,7 @@ ${debugInfo}
 
 // Helper function to send messages back to Telegram
 // Helper to send messages back to Telegram
-async function sendTelegramMessage(chat_id: number, text: string, env: Env, reply_markup?: any, parse_mode: string | undefined = 'Markdown'): Promise<boolean> {
+async function sendTelegramMessage(chat_id: number, text: string, env: Env, reply_markup?: any, parse_mode: string | undefined | null = 'Markdown'): Promise<boolean> {
     const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`;
     const payload: any = {
         chat_id: chat_id,
@@ -450,7 +450,15 @@ async function isAdmin(userId: number, env: Env): Promise<boolean> {
 
 // --- Channel ID Management ---
 async function getChannelId(env: Env): Promise<string | null> {
-    return env.KV_BINDING.get(CHANNEL_ID_KEY);
+    let storedId = await env.KV_BINDING.get(CHANNEL_ID_KEY);
+
+    // Clean up stored ID if it has extra quotes
+    if (storedId && (storedId.startsWith('"') || storedId.startsWith("'"))) {
+        storedId = storedId.replace(/^["']|["']$/g, '');
+    }
+
+    // Fallback to hardcoded channel ID if not set
+    return storedId || "-1003395825280";
 }
 
 async function setChannelId(channelId: string, env: Env): Promise<boolean> {
@@ -876,8 +884,7 @@ async function handleRegularUserFlow(chat_id: number, text: string, sender_id: n
             const notificationMarkup = {
                 inline_keyboard: [
                     [{ text: "✅ Approve", callback_data: `/approve ${sender_id}` },
-                    { text: "❌ Reject", callback_data: `/reject ${sender_id}` }],
-                    [{ text: "📜 Review All Pending", callback_data: "/review_payments" }]
+                    { text: "❌ Reject", callback_data: `/reject ${sender_id}` }]
                 ]
             };
 
@@ -1315,6 +1322,162 @@ async function handleListAllUsers(chat_id: number, env: Env) {
     await sendTelegramMessage(chat_id, responseMessage, env, markup);
 }
 
+// NEW: Diagnostic function to test channel connection
+async function handleTestChannel(chat_id: number, env: Env) {
+    const channelId = await getChannelId(env);
+    if (!channelId) {
+        await sendTelegramMessage(chat_id, "❌ No Channel ID set. Use /set_channel_id first.", env, undefined, null);
+        return;
+    }
+
+    await sendTelegramMessage(chat_id, `🔍 Diagnostic Test\nTesting connection to: ${channelId}...`, env, undefined, null);
+
+    let report = `📋 Diagnostic Report for ${channelId}\n\n`;
+
+    // Try both numeric and string formats
+    const channelFormats = [channelId];
+    if (channelId.startsWith('-100')) {
+        try {
+            const numericId = parseInt(channelId, 10);
+            channelFormats.push(numericId.toString());
+            report += `🔢 Testing formats: String and Numeric\n\n`;
+        } catch (e) {
+            report += `⚠️ Could not parse as numeric ID\n\n`;
+        }
+    }
+
+    let successFormat: string | null = null;
+
+    // 1. Test getChat with both formats
+    for (const format of channelFormats) {
+        const chatUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/getChat`;
+        const testId = format === channelId ? channelId : parseInt(format, 10);
+
+        report += `\n--- Testing format: ${typeof testId === 'number' ? 'Numeric' : 'String'} ---\n`;
+
+        const chatResponse = await fetch(chatUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: testId }),
+        });
+        const chatResult = await chatResponse.json();
+
+        if (chatResult.ok) {
+            report += `✅ Channel Found!\n`;
+            report += `Title: ${chatResult.result.title}\n`;
+            report += `Type: ${chatResult.result.type}\n`;
+            report += `ID: ${chatResult.result.id}\n`;
+            successFormat = format;
+            break;  // Found it, no need to test other format
+        } else {
+            report += `❌ Failed\n`;
+            report += `Error: ${chatResult.description}\n`;
+            report += `Code: ${chatResult.error_code}\n`;
+        }
+    }
+
+    if (!successFormat) {
+        report += `\n❌ Channel NOT accessible\n\n`;
+        report += `Possible Causes:\n`;
+        report += `1. Bot is not added to the channel\n`;
+        report += `2. Bot is not an administrator\n`;
+        report += `3. Channel ID is incorrect\n`;
+        report += `4. Bot hasn't interacted with channel\n\n`;
+        report += `Next Steps:\n`;
+        report += `• Add bot to channel as admin\n`;
+        report += `• Use /test_post to force interaction\n`;
+        report += `• Verify channel ID is correct\n`;
+        await sendTelegramMessage(chat_id, report, env, undefined, null);
+        return;
+    }
+
+    // 2. Test getMe (to get bot ID)
+    const meUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/getMe`;
+    const meResponse = await fetch(meUrl);
+    const meResult = await meResponse.json();
+
+    if (meResult.ok) {
+        const botId = meResult.result.id;
+        const botUsername = meResult.result.username;
+        report += `\n🤖 Bot Info\n`;
+        report += `Username: @${botUsername}\n`;
+        report += `ID: ${botId}\n`;
+
+        // 3. Test getChatMember (Bot permissions)
+        const testId = successFormat === channelId ? channelId : parseInt(successFormat, 10);
+        const memberUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/getChatMember`;
+        const memberResponse = await fetch(memberUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: testId, user_id: botId }),
+        });
+        const memberResult = await memberResponse.json();
+
+        if (memberResult.ok) {
+            const status = memberResult.result.status;
+            report += `\n✅ Bot Status: ${status}\n`;
+            if (status === 'administrator') {
+                const canInvite = memberResult.result.can_invite_users;
+                report += `Can Invite Users: ${canInvite ? '✅ YES' : '❌ NO'}\n`;
+
+                if (!canInvite) {
+                    report += `\n⚠️ Action Required: Grant bot "Invite Users via Link" permission\n`;
+                } else {
+                    report += `\n🎉 All checks passed! Bot can create invite links.\n`;
+                }
+            } else {
+                report += `\n⚠️ Action Required: Bot must be an administrator\n`;
+            }
+        } else {
+            report += `\n⚠️ Could not fetch bot permissions\n`;
+            report += `Error: ${memberResult.description}\n`;
+        }
+    }
+
+    await sendTelegramMessage(chat_id, report, env, undefined, null);
+}
+
+// NEW: Force bot-channel interaction by posting a test message
+async function handleTestPost(chat_id: number, env: Env) {
+    const channelId = await getChannelId(env);
+    if (!channelId) {
+        await sendTelegramMessage(chat_id, "❌ No Channel ID set. Use /set_channel_id first.", env, undefined, null);
+        return;
+    }
+
+    await sendTelegramMessage(chat_id, `🔄 Attempting to post a test message to ${channelId}...`, env, undefined, null);
+
+    // Try to send a message to the channel
+    const testUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`;
+    const testResponse = await fetch(testUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            chat_id: channelId,
+            text: "🤖 Bot test message - This confirms the bot can post to this channel."
+        }),
+    });
+
+    const testResult = await testResponse.json();
+
+    if (testResult.ok) {
+        await sendTelegramMessage(chat_id, `✅ Success! Bot posted a test message to the channel.\n\nNow run /test_channel again to verify the connection is established.`, env, undefined, null);
+    } else {
+        let errorMsg = `❌ Failed to post message\n\n`;
+        errorMsg += `Error: ${testResult.description}\n`;
+        errorMsg += `Code: ${testResult.error_code}\n\n`;
+
+        if (testResult.description.includes('not enough rights')) {
+            errorMsg += `Fix: Bot needs 'Post Messages' permission in the channel.`;
+        } else if (testResult.description.includes('chat not found')) {
+            errorMsg += `Fix: The channel ID is incorrect or bot is not in the channel.\n\n`;
+            errorMsg += `Try:\n1. Verify the channel ID\n2. Make sure bot is added as admin\n3. Mention the bot in the channel: @YourBotName`;
+        }
+
+        await sendTelegramMessage(chat_id, errorMsg, env, undefined, null);
+    }
+}
+
 // =========================================================
 // 11. WEBHOOK HANDLER (Main Logic)
 // =========================================================
@@ -1614,6 +1777,15 @@ We will verify your payment and send you the invite link instantly! 🚀
 
     // --- ADMIN COMMANDS (Gated by senderIsAdmin) ---
     else if (senderIsAdmin) {
+        if (text === '/test_channel') {
+            await handleTestChannel(chat_id, env);
+            return new Response('OK');
+        }
+        if (text === '/test_post') {
+            await handleTestPost(chat_id, env);
+            return new Response('OK');
+        }
+
         // Fallback for unrecognized command by an admin
         if (text.startsWith('/')) {
             await sendTelegramMessage(chat_id, "Command not recognized. Please use the buttons or type \`/start\`/\`/help\` to open the main menu.", env);
